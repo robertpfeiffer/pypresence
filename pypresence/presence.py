@@ -121,6 +121,9 @@ class Presence:
         assert "evt" in payload and payload["evt"]=="READY"
         assert payload["data"]["v"]==1
 
+        self.config_data=payload["data"]["config"]
+        self.user_data=payload["data"]["user"]
+
 
     def update(self,pid=os.getpid(),state=None,details=None,start=None,end=None,large_image=None,large_text=None,small_image=None,small_text=None,party_id=None,party_size=None,join=None,spectate=None,match=None,instance=True):
         current_time = time.time()
