@@ -75,13 +75,15 @@ class Presence:
         return payload
 
     def send_data(self, op: int, payload: dict):
-        payload = json.dumps(payload)
+        payload = json.dumps(payload).encode('utf-8')
+        length=len(payload)
+        # endode first, then take length, because of multibyte code points
         self.sock_writer.write(
             struct.pack(
-                '<ii',
+                '<II',
                 op,
-                len(payload)) +
-            payload.encode('utf-8'))
+                length)
+            + payload)
 
     @asyncio.coroutine
     def handshake(self):
