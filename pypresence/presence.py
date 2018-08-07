@@ -112,6 +112,14 @@ class Presence:
             # see https://discordapp.com/developers/docs/topics/opcodes-and-status-codes#rpc-rpc-close-event-codes
             if payload["code"] == 4000:
                 raise InvalidID
+            elif payload["code"] >= 4000:
+                PyPresenceException(payload["message"])
+
+        # First response should be READY
+        # see https://discordapp.com/developers/docs/topics/rpc#ready
+        assert "cmd" in payload and payload["cmd"]=="DISPATCH"
+        assert "evt" in payload and payload["evt"]=="READY"
+        assert payload["data"]["v"]==1
 
 
     def update(self,pid=os.getpid(),state=None,details=None,start=None,end=None,large_image=None,large_text=None,small_image=None,small_text=None,party_id=None,party_size=None,join=None,spectate=None,match=None,instance=True):
