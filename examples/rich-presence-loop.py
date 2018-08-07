@@ -17,7 +17,8 @@ quotes = [
     "Life is what happens to you while you’re busy making other plans.",
     "Strive not to be a success, but rather to be of value.",
     "The best time to plant a tree was 20 years ago. The second best time is now.",
-    "Everything you’ve ever wanted is on the other side of fear."
+    "Everything you’ve ever wanted is on the other side of fear.",
+    "古池や蛙飛びこむ水の音"
 ]  # The quotes to choose from
 
 
