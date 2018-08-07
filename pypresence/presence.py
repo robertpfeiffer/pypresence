@@ -53,14 +53,23 @@ class Presence:
         else:
             self.handler(context['exception'], context['future'])
 
+    def _decode_data(self, data):
+        # see https://github.com/discordapp/discord-rpc/blob/master/documentation/hard-mode.md
+        code, length = struct.unpack('<II', data[:8])
+        payload = data[8:]
+
+        assert length==len(payload)
+        # if this fails json will be malformed anyway, and API docs require it
+
+        return json.loads(payload.decode('utf-8'))
+
     @asyncio.coroutine
     def read_output(self):
         try:
             data = yield from self.sock_reader.read(1024)
         except BrokenPipeError:
-            raise InvalidID
-        code, length = struct.unpack('<ii', data[:8])
-        payload = json.loads(data[8:].decode('utf-8'))
+            raise InvalidPipe
+        payload = self._decode_data(data)
         if payload["evt"] == "ERROR":
             raise ServerError(payload["data"]["message"])
         return payload
@@ -77,18 +86,31 @@ class Presence:
     @asyncio.coroutine
     def handshake(self):
         if sys.platform == 'linux' or sys.platform == 'darwin':
-            self.sock_reader, self.sock_writer = yield from asyncio.open_unix_connection(self.ipc_path, loop=self.loop)
+            try:
+                self.sock_reader, self.sock_writer = yield from asyncio.open_unix_connection(self.ipc_path, loop=self.loop)
+            except ConnectionRefusedError as err:
+                raise InvalidPipe
         elif sys.platform == 'win32' or sys.platform == 'win64':
             self.sock_reader = asyncio.StreamReader(loop=self.loop)
             reader_protocol = asyncio.StreamReaderProtocol(
                 self.sock_reader, loop=self.loop)
             try:
                 self.sock_writer, _ = yield from self.loop.create_pipe_connection(lambda: reader_protocol, self.ipc_path)
-            except FileNotFoundError:
+            except FileNotFoundError as err:
                 raise InvalidPipe
         self.send_data(0, {'v': 1, 'client_id': self.client_id})
-        data = yield from self.sock_reader.read(1024)
-        code, length = struct.unpack('<ii', data[:8])
+
+        try:
+            data = yield from self.sock_reader.read(1024)
+        except BrokenPipeError:
+            raise InvalidPipe
+
+        payload = self._decode_data(data)
+        if "code" in payload:
+            # see https://discordapp.com/developers/docs/topics/opcodes-and-status-codes#rpc-rpc-close-event-codes
+            if payload["code"] == 4000:
+                raise InvalidID
+
 
     def update(self,pid=os.getpid(),state=None,details=None,start=None,end=None,large_image=None,large_text=None,small_image=None,small_text=None,party_id=None,party_size=None,join=None,spectate=None,match=None,instance=True):
         current_time = time.time()
