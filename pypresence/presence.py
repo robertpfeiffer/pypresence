@@ -1,7 +1,7 @@
 import asyncio
 import inspect
 import json
-import os
+import os, os.path
 import struct
 import sys
 import time
@@ -11,27 +11,18 @@ from .utils import *
 
 
 class Presence:
-    def __init__(self, client_id, pipe=0, loop=None, handler=None):
+    def __init__(self, client_id, pipe=None, loop=None, handler=None):
         client_id = str(client_id)
-        if sys.platform == 'linux' or sys.platform == 'darwin':
-            self.ipc_path = (
-                os.environ.get(
-                    'XDG_RUNTIME_DIR',
-                    None) or os.environ.get(
-                    'TMPDIR',
-                    None) or os.environ.get(
-                    'TMP',
-                    None) or os.environ.get(
-                    'TEMP',
-                    None) or '/tmp') + '/discord-ipc-'+str(pipe)
-            self.loop = asyncio.get_event_loop()
-        elif sys.platform == 'win32':
-            self.ipc_path = r'\\?\pipe\discord-ipc-'+str(pipe)
-            self.loop = asyncio.ProactorEventLoop()
         
+        self._find_rpc_pipe(pipe)
+
         if loop is not None:
             self.loop = loop
-        
+        elif sys.platform == 'win32':
+            self.loop = asyncio.ProactorEventLoop()
+        else:
+            self.loop = asyncio.get_event_loop()
+            
         self.sock_reader: asyncio.StreamReader = None
         self.sock_writer: asyncio.StreamWriter = None
         self.client_id = client_id
