@@ -53,14 +53,15 @@ class Presence(BaseClient):
             "nonce": '{:.20f}'.format(current_time)
         }
         payload = remove_none(payload)
-
-        self.send_data(1, payload)
-        response = self.loop.run_until_complete(self.read_output())
-
-        self.listening=was_listening
-        #NOT THREAD SAFE AND THAT'S AN UNDERSTATEMENT
-        self.sock_reader._waiter=waiter
-        return payload
+        try:
+            self.send_data(1, payload)
+            response = self.loop.run_until_complete(self.read_output())
+        finally:
+            #NOT THREAD SAFE AND THAT'S AN UNDERSTATEMENT
+            
+            self.listening=was_listening
+            self.sock_reader._waiter=waiter
+        return response
 
     def clear(self,pid=os.getpid()):
         current_time = time.time()

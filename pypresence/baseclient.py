@@ -135,7 +135,6 @@ class BaseClient:
                 if event_json.get("cmd", None) == "DISPATCH":
                     evt=event_json.get("evt", None)
                     handler = self._events.get(evt, None)
-                    print("#", evt, handler)
                     if handler:
                         handler(event_json["data"])
         except InvalidPipe:    
