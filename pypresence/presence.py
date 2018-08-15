@@ -12,6 +12,14 @@ class Presence(BaseClient):
         super().__init__(*args, **kwargs)
 
     def update(self,pid=os.getpid(),state=None,details=None,start=None,end=None,large_image=None,large_text=None,small_image=None,small_text=None,party_id=None,party_size=None,join=None,spectate=None,match=None,instance=True):
+
+        was_listening=self.listening
+        waiter=self.sock_reader._waiter
+        self.sock_reader._waiter=None
+        #HACK
+        #not thread safe in the least
+        #if we are listening for events in the background
+            
         current_time = time.time()
         payload = {
             "cmd": "SET_ACTIVITY",
@@ -47,7 +55,12 @@ class Presence(BaseClient):
         payload = remove_none(payload)
 
         self.send_data(1, payload)
-        return self.loop.run_until_complete(self.read_output())
+        response = self.loop.run_until_complete(self.read_output())
+
+        self.listening=was_listening
+        #NOT THREAD SAFE AND THAT'S AN UNDERSTATEMENT
+        self.sock_reader._waiter=waiter
+        return payload
 
     def clear(self,pid=os.getpid()):
         current_time = time.time()
@@ -65,7 +78,3 @@ class Presence(BaseClient):
     def connect(self):
         return self.loop.run_until_complete(self.handshake())
 
-    def close(self):
-        self.send_data(2, {'v': 1, 'client_id': self.client_id})
-        self.sock_writer.close()
-        self.loop.close()

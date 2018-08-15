@@ -3,6 +3,7 @@ import json
 import os
 import struct
 import sys
+import time
 
 from .exceptions import *
 from .utils import *
@@ -11,8 +12,13 @@ from .utils import *
 class BaseClient:
 
     def __init__(self, client_id, pipe=0, loop=None, handler=None):
-        client_id = str(client_id)
+        self.client_id = str(client_id)
+        
         self.connected=False
+        self.listening=False
+        self._events={}
+        self.oauth_token = None
+        
         if sys.platform == 'linux' or sys.platform == 'darwin':
             # not os.name == 'posix'
             self.ipc_path = (
@@ -44,7 +50,6 @@ class BaseClient:
 
         self.sock_reader: asyncio.StreamReader = None
         self.sock_writer: asyncio.StreamWriter = None
-        self.client_id = client_id
 
         if handler is not None:
             if not inspect.isfunction(handler):
@@ -57,11 +62,6 @@ class BaseClient:
             loop.set_exception_handler(self._err_handle)
             self.handler = handler
 
-        if getattr(self, "on_event", None):  # Tasty bad code ;^)
-            self._events_on = True
-        else:
-            self._events_on = False
-
     def _err_handle(self, loop, context):
         if inspect.iscoroutinefunction(self.handler):
             loop.run_until_complete(self.handler(context['exception'], context['future']))
@@ -72,9 +72,9 @@ class BaseClient:
         # see https://github.com/discordapp/discord-rpc/blob/master/documentation/hard-mode.md
 
         try:
-            message_header = await self.sock_reader.read(8)
+            message_header = await self.sock_reader.readexactly(8)
             code, length = struct.unpack('<II', message_header)
-            payload = await self.sock_reader.read(length)
+            payload = await self.sock_reader.readexactly(length)
         except BrokenPipeError:
             self.connected=False
             raise InvalidPipe
@@ -83,6 +83,66 @@ class BaseClient:
         if parsed.get("evt", None)=="ERROR":
             raise ServerError(parsed["data"]["message"])
         return parsed
+
+    def callback(self, event="NOTIFICATION_CREATE", **args):
+        def register_inner(func):
+            self.register_event(event, func, args)
+        return register_inner
+    
+    def register_event(self, event: str, func, args={}):
+        event=event.upper()
+        if inspect.iscoroutinefunction(func):
+            raise NotImplementedError
+        elif len(inspect.signature(func).parameters) != 1:
+            raise ArgumentError
+        self.subscribe(event, args)
+        self._events[event] = func
+
+    def unregister_event(self, event: str, args={}):
+        event=event.upper()
+        if event not in self._events:
+            raise EventNotFound
+        self.unsubscribe(event, args)
+        del self._events[event]
+
+    def subscribe(self, event, args={}):
+        current_time = time.time()
+        payload = {
+            "cmd": "SUBSCRIBE",
+            "args": args,
+            "evt": event.upper(),
+            "nonce": '{:.20f}'.format(current_time)
+        }
+        sent = self.send_data(1, payload)
+        return self.loop.run_until_complete(self.read_output())
+    
+    def unsubscribe(self, event, args={}):
+        current_time = time.time()
+        payload = {
+            "cmd": "UNSUBSCRIBE",
+            "args": args,
+            "evt": event.upper(),
+            "nonce": '{:.20f}'.format(current_time)
+        }
+        sent = self.send_data(1, payload)
+        return self.loop.run_until_complete(self.read_output())
+    
+    async def respond_to_events(self):
+        self.listening=True
+        try:
+            while self.connected and self.listening:
+                event_json = await self.read_output()
+                if event_json.get("cmd", None) == "DISPATCH":
+                    evt=event_json.get("evt", None)
+                    handler = self._events.get(evt, None)
+                    print("#", evt, handler)
+                    if handler:
+                        handler(event_json["data"])
+        except InvalidPipe:    
+            if self.sock_reader._eof:
+                return
+        finally:
+            self.listening=False
 
     def send_data(self, op: int, payload: dict):
         payload = json.dumps(payload).encode('utf-8')
@@ -125,6 +185,10 @@ class BaseClient:
             self.user_data=response["data"]["user"]
             self.connected=True
 
-            if self._events_on:
-                self.sock_reader.feed_data = self.on_event
             return response
+        
+    def close(self):
+        self.send_data(2, {'v': 1, 'client_id': self.client_id})
+        self.sock_writer.close()
+        self.connected = False
+        self.loop.close()
