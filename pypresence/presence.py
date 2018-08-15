@@ -36,6 +36,8 @@ class Presence:
         self.sock_writer: asyncio.StreamWriter = None
         self.client_id = client_id
 
+        self.connected=False
+
         if handler is not None:
             if not inspect.isfunction(handler):
                 raise PyPresenceException('Error handler must be a function.')
@@ -47,32 +49,63 @@ class Presence:
             loop.set_exception_handler(self._err_handle)
             self.handler = handler
 
+    def _find_rpc_pipe(self,pipe):
+        if pipe is None:
+             file_pattern='discord-ipc-[0-9]'
+        elif type(pipe)== int:
+            file_pattern='discord-ipc-{}'.format(pipe)
+        elif type(pipe)==str and os.path.exists(pipe):
+            self.ipc_path=pipe
+            return
+        else:
+            raise PyPresenceException("pipe should be path, int, or None, but got {} ({})".format(type(pipe), pipe))
+        
+        if sys.platform == 'linux' or sys.platform == 'darwin':
+            # not os.name == 'posix', no Discord on Cygwin/Solaris/BSD
+            import glob
+            # can only glob IPC paths on UNIX
+            vars = ['XDG_RUNTIME_DIR','TMPDIR','TMPDIR','TMP','TEMP']
+            dirs=[os.environ[var] for var in vars
+                                          if var in os.environ] + ["/tmp"]
+            for d in dirs:
+                paths=glob.glob(os.path.join(d,file_pattern))
+                if paths:
+                    self.ipc_path=paths[0]
+                    break
+            else:
+                raise InvalidPipe("No IPC pipe found. Is Discord running?")
+
+        elif sys.platform == 'win32':
+            # TODO find a way to quit early if Discord isn't running
+            # Can't use os.path here
+            self.ipc_path=r'\\?\pipe\discord-ipc-{}'.format(pipe or 0)
+        else:
+            raise PyPresenceException('unsupported platform: {} ({})'
+                            .format(sys.platform, os.name))
+
+
     def _err_handle(self, loop, context):
         if inspect.iscoroutinefunction(self.handler):
             loop.run_until_complete(self.handler(context['exception'], context['future']))
         else:
             self.handler(context['exception'], context['future'])
 
-    def _decode_data(self, data):
-        # see https://github.com/discordapp/discord-rpc/blob/master/documentation/hard-mode.md
-        code, length = struct.unpack('<II', data[:8])
-        payload = data[8:]
-
-        assert length==len(payload)
-        # if this fails json will be malformed anyway, and API docs require it
-
-        return json.loads(payload.decode('utf-8'))
-
     @asyncio.coroutine
     def read_output(self):
+        # see https://github.com/discordapp/discord-rpc/blob/master/documentation/hard-mode.md
+        
         try:
-            data = yield from self.sock_reader.read(1024)
+            message_header = yield from self.sock_reader.read(8)
+            code, length = struct.unpack('<II', message_header)
+            payload = yield from self.sock_reader.read(length)
         except BrokenPipeError:
+            self.connected=False
             raise InvalidPipe
-        payload = self._decode_data(data)
-        if payload["evt"] == "ERROR":
-            raise ServerError(payload["data"]["message"])
-        return payload
+        assert length==len(payload)
+        parsed=json.loads(payload.decode('utf-8'))
+        if parsed["evt"]=="ERROR":
+            raise ServerError(parsed["data"]["message"])
+        return parsed
 
     def send_data(self, op: int, payload: dict):
         payload = json.dumps(payload).encode('utf-8')
@@ -100,29 +133,26 @@ class Presence:
                 self.sock_writer, _ = yield from self.loop.create_pipe_connection(lambda: reader_protocol, self.ipc_path)
             except FileNotFoundError as err:
                 raise InvalidPipe
+        
         self.send_data(0, {'v': 1, 'client_id': self.client_id})
-
-        try:
-            data = yield from self.sock_reader.read(1024)
-        except BrokenPipeError:
-            raise InvalidPipe
-
-        payload = self._decode_data(data)
+        
+        payload = yield from self.read_output()
+        
         if "code" in payload:
             # see https://discordapp.com/developers/docs/topics/opcodes-and-status-codes#rpc-rpc-close-event-codes
             if payload["code"] == 4000:
                 raise InvalidID
-            elif payload["code"] >= 4000:
-                PyPresenceException(payload["message"])
-
+            raise ServerError(payload["message"])
+                
         # First response should be READY
         # see https://discordapp.com/developers/docs/topics/rpc#ready
-        assert "cmd" in payload and payload["cmd"]=="DISPATCH"
-        assert "evt" in payload and payload["evt"]=="READY"
-        assert payload["data"]["v"]==1
+        if "cmd" in payload and payload["cmd"]=="DISPATCH" and "evt" in payload and payload["evt"]=="READY":
+            assert payload["data"]["v"]==1
 
-        self.config_data=payload["data"]["config"]
-        self.user_data=payload["data"]["user"]
+            self.config_data=payload["data"]["config"]
+            self.user_data=payload["data"]["user"]
+            self.connected=True
+        return payload
 
 
     def update(self,pid=os.getpid(),state=None,details=None,start=None,end=None,large_image=None,large_text=None,small_image=None,small_text=None,party_id=None,party_size=None,join=None,spectate=None,match=None,instance=True):
@@ -177,7 +207,7 @@ class Presence:
         return self.loop.run_until_complete(self.read_output())
     
     def connect(self):
-        self.loop.run_until_complete(self.handshake())
+        return self.loop.run_until_complete(self.handshake())
 
     def close(self):
         self.send_data(2, {'v': 1, 'client_id': self.client_id})
