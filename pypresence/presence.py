@@ -92,7 +92,7 @@ class Presence:
                 self.sock_reader, self.sock_writer = yield from asyncio.open_unix_connection(self.ipc_path, loop=self.loop)
             except ConnectionRefusedError as err:
                 raise InvalidPipe
-        elif sys.platform == 'win32' or sys.platform == 'win64':
+        elif sys.platform == 'win32':
             self.sock_reader = asyncio.StreamReader(loop=self.loop)
             reader_protocol = asyncio.StreamReaderProtocol(
                 self.sock_reader, loop=self.loop)
